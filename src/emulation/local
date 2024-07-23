@@ -1,0 +1,152 @@
+#!/bin/bash -e
+
+function usage() {
+    F=$(realpath --relative-to=. $0)
+    echo "Usage: ${F} (unit|cmd) [-w|--watch]"
+    echo "Runs local unit or cmd, pass -w|--watch to watch changes in executable"
+    echo "Pass any other options after -- to all units/cmds argv"
+}
+
+function invalid() {
+    echo Invalid params
+    usage
+    exit 1
+}
+
+TO_RUN=
+
+while [ "$1" != "" ]; do
+    case $1 in
+        -h | --help)
+            usage
+            exit
+            ;;
+        -w | --watch)
+            WATCH=1
+            echo "running in watch mode"
+            ;;
+        unit | cmd | router | hal)
+            if [[ ! -z "$TO_RUN" ]]; then
+                invalid
+            fi
+            TO_RUN=$1
+            ;;
+        --)
+            shift
+            OPTS="$@"
+            break
+            ;;
+        *)
+            echo "Unknown parameter \"$1\""
+            usage
+            exit 1
+    esac
+    shift
+done
+
+LOG_PATH="/var/log/caian/local-"
+EXECUTABLE=""
+COMMAND=""
+
+case $TO_RUN in
+    unit)
+        LOG_PATH+="unit"
+        EXECUTABLE="./unit/daemon/daemon"
+        COMMAND="./unit/daemon/daemon -s /var/lib/caian/local-unit.store.sqllite --ui-socket /tmp/local-unit.sock"$OPTS
+
+        socat TCP4-LISTEN:3270,fork,reuseaddr UNIX-CONNECT:/tmp/local-unit.sock &
+        echo /tmp/local-unit.sock '<-->' 3270
+        ;;
+    cmd)
+        LOG_PATH+="cmd"
+        EXECUTABLE="./cmd/daemon/daemon"
+        COMMAND="./cmd/daemon/daemon -s /var/lib/caian/local-cmd.store.sqllite --ui-socket /tmp/local-cmd.sock --videos-path /var/lib/caian/local-cmd.videos --units-path units.json --groups-path groups.json "$OPTS
+
+        socat TCP4-LISTEN:3170,fork,reuseaddr UNIX-CONNECT:/tmp/local-cmd.sock &
+        echo /tmp/local-cmd.sock '<-->' 3170
+
+        if [[ ! -a "units.json" ]]; then
+            echo >units.json '{
+                "units": [
+                    {
+                        "ip": "127.0.0.1",
+                        "name": "Localhost"
+                    },
+                    {
+                        "ip": "10.0.0.1",
+                        "name": "Ahmed Mahmoud"
+                    },
+                    {
+                        "ip": "10.0.0.2",
+                        "name": "Yosry Ahmed"
+                    },
+                    {
+                        "ip": "10.0.0.3",
+                        "name": "Mahmoud Othman"
+                    },
+                    {
+                        "ip": "10.0.0.4",
+                        "name": "Abdulrahman Khalid"
+                    },
+                    {
+                        "ip": "10.0.0.5",
+                        "name": "Muhanad Atef"
+                    },
+                    {
+                        "ip": "10.0.0.6",
+                        "name": "Nader AbdElGhani"
+                    }
+                ]
+            }
+            '
+        fi
+
+        if [[ ! -a "groups.json" ]]; then
+            echo >groups.json '{
+                "224.0.2.1": [
+                    "10.0.0.1",
+                    "10.0.0.2"
+                ],
+                "224.0.2.2": [
+                    "10.0.0.3",
+                    "10.0.0.4"
+                ],
+                "224.0.2.3": [
+                    "10.0.0.5",
+                    "10.0.0.6"
+                ]
+            }
+            '
+        fi
+        ;;
+    router)
+        (cd ./router && go build)
+        LOG_PATH+="router"
+        EXECUTABLE="./router/router"
+        COMMAND="./router/deploy "$OPTS
+        ;;
+    hal)
+        LOG_PATH+="halsimulation"
+        EXECUTABLE="./unit/halsimulation/halsimulation"
+        COMMAND="./unit/halsimulation/halsimulation "$OPTS
+        ;;
+    *)
+        echo "Unknown TO_RUN \"$TO_RUN\""
+        usage
+        exit 1
+esac
+
+mkdir -p /var/log/caian/ /var/lib/caian/
+
+echo "DBs/videos are in /var/lib/caian/"
+
+# copy all stdout/stderr to log
+echo "stdout+stderr is saved in "$LOG_PATH
+exec &> >(tee  -a $LOG_PATH)
+echo ------------------------
+
+if [[ $WATCH -eq 1 ]]; then
+    exec ./emulation/watchdog --file "$EXECUTABLE" --command "$COMMAND"
+else
+    exec $COMMAND
+fi

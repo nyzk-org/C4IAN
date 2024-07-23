@@ -1,0 +1,416 @@
+#!/usr/bin/python3
+import argparse
+import json
+import math
+import threading
+import time
+from typing import List, NamedTuple
+
+from mininet.log import debug, setLogLevel
+from mininet.util import ipAdd
+from mn_wifi.cli import CLI
+from mn_wifi.link import adhoc, wmediumd
+from mn_wifi.net import Mininet_wifi
+from mn_wifi.wmediumdConnector import interference
+from numpy import ERR_CALL
+from simple_websocket_server import WebSocket, WebSocketServer
+
+import location as loc
+import pymobility
+
+WIRELESS_CONF = {
+    'cls': adhoc,
+    'ssid': 'C4IAN-GLOBAL-SSID',
+    'ht_cap': 'HT40+',
+    'channel': 5,
+    'mode': 'g',
+}
+PROPAGATION_MODEL = {
+    'model': 'logDistance',
+    'exp': 3
+}
+
+REFRESH_PERIOD = 1 / 15  # 15ms
+MOB_STEP_PERIOD = 1 / 30  # 30ms
+GAIN = 5.0
+
+running = True
+
+
+def log_distance_txpower_to_rng(txpower, freq, gain):
+    ppm_sL = 1
+
+    f = freq * 10 ** 9  # Convert Ghz to Hz
+    c = 299792458.0
+    lambda_ = c / f  # lambda: wavelength (m)
+    denominator = lambda_ ** 2
+    numerator = (4 * math.pi * 1) ** 2 * ppm_sL
+    pl = 10 * math.log10(numerator / denominator)
+
+    txpower = int(txpower)
+    gains = txpower + (gain * 2)
+    ref_d = 1
+    ppm_exp = 3
+    ppm_noise_th = -91
+
+    range = math.pow(10, ((-ppm_noise_th - pl + gains) /
+                          (10 * ppm_exp))) * ref_d
+
+    return range
+
+
+def log_distance_rng_to_txpower(rng, freq, gain):
+    f = freq * 10 ** 9  # Convert Ghz to Hz
+    c = 299792458.0
+    lambda_ = c / f  # lambda: wavelength (m)
+    denominator = lambda_ ** 2
+    ppm_sL = 1
+    numerator = (4 * math.pi) ** 2 * ppm_sL
+    pl = 10 * math.log10(numerator / denominator)
+
+    ppm_exp = 3
+    ppm_noise_th = -91
+    dist = rng
+    g_fixed = (gain * 2)
+    ref_d = 1
+    numerator = math.pow(dist / ref_d, 10 * ppm_exp) * 10 ** pl
+    denominator = 10 ** - ppm_noise_th
+
+    txpower = int(math.ceil(math.log10(numerator / denominator) - g_fixed))
+    if txpower < 0:
+        txpower = 1
+
+    return txpower
+
+
+class Position(NamedTuple):
+    lon: int  # x
+    lat: int  # y
+
+    def __str__(self) -> str:
+        return f'{self.lat},{self.lon},0'
+
+    def to_mn(self):
+        x, y = loc.to_mn_coords(self.lon, self.lat)
+        return Position(x, y)
+
+
+class Node(NamedTuple):
+    i: int
+    name: str
+    position: Position
+
+    def get_socks(self):
+        return [f'/tmp/{self.name}.router.locsock', f'/tmp/{self.name}.hal.locsock']
+
+    def get_ip(self):
+        t = self.name[0].lower()
+        num = int(self.name[1:])
+        if t == 'u':
+            return ipAdd(num)
+        elif t == 'c':
+            return ipAdd(num+255)
+
+
+def read_topo(path_to_json: str) -> List[Node]:
+    with open(path_to_json) as f:
+        topo = json.load(f)
+
+    return [
+        Node(i, node['name'],
+             Position(node['lon'], node['lat']).to_mn())
+        for i, node in enumerate(topo['nodes'])
+    ], topo['range'], topo['zlen']
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Virtualize a topology using mininet-wifi.'
+    )
+    parser.add_argument('topology', help='Path to .topo file to load')
+
+    parser.add_argument(
+        '-d', '--debug', help='Print debug level logs', action='store_true'
+    )
+
+    parser.add_argument('-p', '--port', default=2479, type=int,
+                        help='Port number to listen to')
+
+    return parser.parse_args()
+
+
+def locations_thread():
+    print('locations', end=' ')
+    while running:
+        for node in nodes:
+            for sock in node.get_socks():
+                x, y, _ = stations[node.name].getxyz()
+                lat, lon = loc.to_gps_coords(x, y)
+                loc.send_location(sock, lon, lat)
+        time.sleep(REFRESH_PERIOD)
+    print('locations', end=' ')
+
+
+def get_node_by_name(name) -> Node:
+    for node in nodes:
+        if node.name == name:
+            return node
+    raise Exception(f'node with name = {name} is not found')
+
+
+def mobility_thread():
+    print('mobility', end=' ')
+
+    old_mob_enabled = mob_enabled
+    while True:
+        mob_signal.wait()
+        mob_signal.clear()
+        if not mob_enabled:
+            debug('mobility is disabled\n')
+            old_mob_enabled = mob_enabled
+            continue
+
+        if old_mob_enabled != mob_enabled:
+            debug('mobility is enabled\n')
+            old_mob_enabled = mob_enabled
+
+        while not mob_signal.is_set():
+            positions = next(mob_generator)
+            for name, sta in stations.items():
+                if not running:
+                    print('mobility', end=' ')
+                    return
+                if mob_signal.is_set() or not mob_enabled:
+                    break
+
+                i = get_node_by_name(name).i
+                x, y = positions[i][0], positions[i][1]
+                dx, dy = mob_offset
+                sta.setPosition(str(Position(y+dy, x+dx)))
+            time.sleep(MOB_STEP_PERIOD)
+
+
+class FileToSave(NamedTuple):
+    path: str
+    content: str
+
+    def save(self):
+        with open(self.path, 'w') as f:
+            f.write(self.content)
+
+
+def get_units_file(cmd_name: str, cmd_units: List[Node]) -> FileToSave:
+    return FileToSave(
+        path=f'/tmp/mn.{cmd_name}.units.json',
+        content=json.dumps({
+            'units': [{'ip': unit.get_ip(), 'name': unit.name} for unit in cmd_units]
+        })
+    )
+
+
+def get_metadata_files(nodes: List[Node]) -> List[FileToSave]:
+    metadata = {
+        'router': {'groups_file': dict()},  # ok
+        'unit': {'cmd_addr': dict()},  # ok
+        'cmd': {
+            'units_file': dict(),
+            'groups_file': dict(),  # ok
+        }
+    }
+    units = sorted([node for node in nodes if 'u' in node.name],
+                   key=lambda node: int(node.name[1:]))
+    cmds = sorted([node for node in nodes if 'c' in node.name],
+                  key=lambda node: int(node.name[1:]))
+
+    groups = {
+        "224.0.2.1": [unit.get_ip() for unit in units[:len(units)//2]],
+        "224.0.2.2": [unit.get_ip() for unit in units[len(units)//2:]]
+    }
+    groups_file = FileToSave('/tmp/mn.groups.json', json.dumps(groups))
+    for node in nodes:
+        metadata['router']['groups_file'][node.name] = groups_file.path
+    for cmd in cmds:
+        metadata['cmd']['groups_file'][cmd.name] = groups_file.path
+
+    files = [groups_file]
+
+    j = 0
+    units_per_cmd = len(units)//len(cmds)
+    for i, cmd in enumerate(cmds):
+        if i == len(cmds)-1:
+            cmd_units = units[j:]
+        else:
+            cmd_units = units[j:j+units_per_cmd]
+            j += units_per_cmd
+
+        for unit in cmd_units:
+            metadata['unit']['cmd_addr'][unit.name] = f'{cmd.get_ip()}:4170'
+
+        units_file = get_units_file(cmd.name, cmd_units)
+        metadata['cmd']['units_file'][cmd.name] = units_file.path
+        files.append(units_file)
+
+    files.append(FileToSave('/tmp/mn.metadata.json', json.dumps(metadata)))
+    return files
+
+
+args = parse_args()
+nodes, rng, zlen = read_topo(args.topology)
+
+print('*** Saving metadata files')
+metadata_files = get_metadata_files(nodes)
+for f in metadata_files:
+    f.save()
+
+
+def nodes_coords(offset):
+    names = {node.name: i for i, node in enumerate(nodes)}
+    xs = [None] * len(names)
+    ys = [None] * len(names)
+    dx, dy = offset
+    for name, i in names.items():
+        x, y, _ = stations[name].getxyz()
+        xs[i] = x - dx
+        ys[i] = y - dy
+    return xs, ys
+
+
+setLogLevel('debug' if args.debug else 'info')
+
+print("*** Creating mn-wifi net")
+net = Mininet_wifi(link=wmediumd, wmediumd_mode=interference)
+
+print("*** Creating nodes")
+stations = {}
+for node in nodes:
+    stations[node.name] = net.addStation(
+        node.name, position=str(node.position)
+    )
+
+print("*** Configuring wifi nodes")
+net.configureWifiNodes()
+net.setPropagationModel(**PROPAGATION_MODEL)
+
+print("*** Creating links")
+for node in nodes:
+    intf = f'{node.name}-wlan0'
+    stations[node.name].setIP(node.get_ip(), intf=intf)
+
+    link = net.addLink(
+        stations[node.name],
+        intf=intf,
+        **WIRELESS_CONF
+    )
+    txpower = log_distance_rng_to_txpower(rng, link.freq, GAIN)
+    newrng = log_distance_txpower_to_rng(txpower, link.freq, GAIN)
+
+    link.setAntennaGain(GAIN)
+    link.setTxPower(txpower)
+
+print(f'range = {newrng:.2f} m')
+print(f'txpower = {txpower}dBm')
+
+# mobility variables
+mob_signal = threading.Event()  # set to signal mob settings changed
+mob_enabled = False
+mob_generator = None
+mob_extent = None
+mob_offset = (0, 0)
+
+
+def extent_to_dimensions(extent):
+    if extent:
+        x1, y1 = loc.to_mn_coords(extent['lon1'], extent['lat1'])
+        x2, y2 = loc.to_mn_coords(extent['lon2'], extent['lat2'])
+        return (abs(y1-y2), abs(x1-x2))
+    return (40030173.59204114, 40030173.59204114)
+
+
+def extent_to_offset(extent):
+    if extent:
+        return loc.to_mn_coords(extent['lat2'], extent['lon1'])
+    return (0, 0)
+
+
+class WSServer(WebSocket):
+    def handle(self):
+        data = json.loads(self.data)
+
+        if data['type'] == 'setNodePosition':
+            pos = Position(data['lon'], data['lat']).to_mn()
+            station = stations[data['name']]
+
+            station.setPosition(str(pos))
+        elif data['type'] == 'setMobility':
+            global mob_signal, mob_enabled, mob_generator, mob_offset, mob_extent
+
+            if data['action'] in ('start', 'change'):
+                mob_extent = data['extent']
+                mob_offset = extent_to_offset(mob_extent)
+                mob_generator = pymobility.tvc(
+                    coords=nodes_coords(mob_offset),
+                    dimensions=extent_to_dimensions(mob_extent),
+                    velocity=(
+                        loc.kmhour_to_msec(data['minVel']),
+                        loc.kmhour_to_msec(data['maxVel'])
+                    ),
+                    aggregation=[data['aggregation']],
+                    epoch=[1],
+                )
+
+                mob_enabled = True
+            elif data['action'] == 'stop':
+                mob_enabled = False
+
+            mob_signal.set()
+
+    def _send_thread(self):
+        try:
+            while running:
+                nodes = []
+                for name, station in stations.items():
+                    x, y, _ = station.getxyz()
+                    lat, lon = loc.to_gps_coords(x, y)
+                    nodes.append({'name': name, 'lon': lon, 'lat': lat})
+                self.send_message(
+                    json.dumps({'nodes': nodes, 'zlen': zlen, 'range': rng})
+                )
+                time.sleep(REFRESH_PERIOD)
+        except:
+            pass
+
+    def connected(self):
+        debug('websocket-client has connected\n')
+        threading.Thread(target=self._send_thread, daemon=True).start()
+
+    def handle_close(self):
+        debug('websocket-client has closed\n')
+        global mob_enabled, mob_signal
+        mob_enabled = False
+        mob_signal.set()
+
+    @classmethod
+    def serve(cls):
+        print('server', end=' ')
+        WebSocketServer('', args.port, WSServer).serve_forever()
+
+
+print("*** Starting network")
+net.build()
+print()
+
+print('*** Starting threads')
+for func in (WSServer.serve, locations_thread, mobility_thread):
+    threading.Thread(target=func, daemon=True).start()
+print()
+
+print("*** Running CLI")
+CLI(net)
+
+print('*** Stopping threads')
+running = False
+time.sleep(.5)  # wait for threads
+print()
+
+print("*** Stopping network")
+net.stop()

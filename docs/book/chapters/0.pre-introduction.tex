@@ -1,0 +1,155 @@
+\pagenumbering{roman}
+\pagecolor{gpCoverBGColor}\afterpage{\nopagecolor}
+\thispagestyle{empty}
+{\color{gpCoverTextColor}
+\begin{figure}
+\includegraphics[width=1.09in]{images/cu-logo.png}\\
+{\color{gpCoverTextColor} 
+Cairo University\\
+Faculty of Engineering\\
+Department of Computer Engineering
+}
+\vspace{30pt}
+\end{figure}
+
+\begin{center}
+    \vspace{10pt}
+    {\fontsize{32}{50} \selectfont \textbf{\gpProject{}}}
+    \vspace{15pt}
+    
+    \begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{images/logo.png}
+    \label{fig:logo}
+    \end{figure}
+
+    \vspace{10pt}
+    \textbf{A Graduation Project Report Submitted}
+    \vspace{3pt}\\
+    to
+    \vspace{3pt}\\
+    \textbf{Faculty of Engineering, Cairo University} 
+    \vspace{3pt}\\
+    \textbf{in Partial Fulfillment of the requirements of the degree}
+    \vspace{3pt}\\
+    of
+    \vspace{3pt}\\
+    \textbf{Bachelor of Science in Computer Engineering}
+    \vspace{10pt}
+    
+    \vspace{15pt}
+    {\Large \textbf{Presented by}}\\
+    \begin{center}
+    \begin{tabular}{ l c r }
+     \textbf{\gpStudentFirst} & \hspace{50pt} & \textbf{\gpStudentSecond} \\
+     \textbf{\gpStudentThird} & \hspace{50pt} & \textbf{\gpStudentFourth}
+    \end{tabular}
+    \end{center}
+    
+    \vspace{8pt}
+    {\Large \textbf{Supervised by}}\\
+    \vspace{5pt}
+    \textbf{\gpSupervisor}
+    
+    \vspace{15pt}
+    \textbf{\gpDate{}}
+    
+    \vspace{10pt}
+    All rights reserved. This report may not be reproduced in whole or in part, by photocopying or other means, without the permission of the authors/department.    
+\end{center}
+\newpage
+}
+
+\section*{Abstract}
+\label{sec:abstract}
+\addcontentsline{toc}{section}{\nameref{sec:abstract}}
+
+% The abstract should clearly and briefly describe the project objective(s) and outcome(s). In details, the abstract should include, but not limited to, all of the following:
+%     \begin{itemize}
+%         \item The problem(s) which is(are) addressed in the project
+%         \item The objective(s) of the project
+%         \item The approach that is followed to solve the problem
+%         \item The output(s) of the project
+%         \item Testing/development tools and summary of testing results
+%         \item The sponsor(s), if any
+%     \end{itemize}
+
+\quad \acrfull{manets} is an ever-growing research field due to their numerous practical applications. \acrshort{manets} provide means for infrastructure-less communications, they are utilized by tactical teams, military, emergency and rescue teams, drone swarms, and many others. \\
+
+\acrshort{caian} (\acrlong{caian}) is a scalable communications solution for tactical teams. It builds a \acrshort{manet} on-the-go between command centers and units, allowing them to communicate effectively and securely while moving freely, without the need for any infrastructure. \\
+
+Our system can be run on handheld tactical devices, robots, drones, or any other Linux-based platform. It features both a platform-independent network layer which routes data through dynamically changing and scalable topologies, and applications for tactical teams’ units and command centers to communicate through. \\
+
+\acrshort{caian}'s router implements \acrfull{zhls} routing for uni-casting, \acrfull{odmrp} for multi-casting, and a unique \acrfull{vrb} that is based on \acrshort{zhls}. We also introduced some improvements to \acrshort{zhls} and \acrshort{odmrp} to optimize their implementation.
+
+\newpage
+
+\begin{arabtext}
+{\huge
+المُلَخَّص
+}\vspace{20pt}
+\input{arabic-abstract}
+\end{arabtext}
+\newpage
+
+\section*{Acknowledgment}
+\addcontentsline{toc}{section}{Acknowledgment}
+\quad Our gratitude to those who helped us cannot be put in words. First, we would like to express our appreciation and thankfulness to our supervisor, \textbf{Dr. Ahmed Hamdy}, for his utmost care and support for us during our work. His guidance and mentorship have been critical to our success. \\
+
+We would also like to thank our family, friends and colleagues, who have always been there to support us and push us forward. We are defined by the people who surround us, and those people made us who we are today.
+\newpage
+
+\tableofcontents
+\addcontentsline{toc}{section}{\contentsname}
+
+\listoffigures
+\addcontentsline{toc}{section}{List of Figures}
+
+\listoftables
+\addcontentsline{toc}{section}{List of Tables}
+
+\clearpage
+
+\printglossary[type=\acronymtype,title=List of Abbreviations]
+
+\clearpage
+
+\section*{Contacts}
+\label{sec:contacts}
+\addcontentsline{toc}{section}{\nameref{sec:contacts}}
+
+\subsubsection*{\centering Team Members}
+\rowcolors{2}{gray!25}{white}
+{
+\centering
+\begin{tabular}{|l | l | l|}
+\rowcolor{gray!50}
+    \hline
+    Name & Email & Phone Number\\\hline\hline
+    \gpStudentFirst & \gpStudentFirstEmail & \gpStudentFirstMobile\\\hline
+    \gpStudentSecond & \gpStudentSecondEmail & \gpStudentSecondMobile\\\hline
+    \gpStudentThird & \gpStudentThirdEmail & \gpStudentThirdMobile\\\hline
+    \gpStudentFourth & \gpStudentFourthEmail & \gpStudentFourthMobile\\\hline
+\end{tabular}
+}
+
+\subsubsection*{\centering Supervisor}
+\rowcolors{2}{gray!25}{white}
+\begin{center}
+\begin{tabular}{|l | l | l|}
+\rowcolor{gray!50}
+    \hline
+    Name & Email & Phone Number\\\hline\hline
+    \gpSupervisor & \gpSupervisorEmail & \gpSupervisorMobile\\\hline
+\end{tabular}
+\end{center}
+
+\clearpage
+\vspace*{\fill}
+\begin{center}
+\begin{minipage}{.45\textwidth}
+This page is intentionally left blank
+\end{minipage}
+\end{center}
+\vfill % equivalent to \vspace{\fill}
+\clearpage
